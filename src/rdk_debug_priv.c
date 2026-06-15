@@ -269,14 +269,21 @@ static void flush_pattern_summary(log4c_category_t* cat, int log4cPriority)
                      g_pattern_tracker.pattern_length, g_pattern_tracker.repeat_count, 
                      suppressed_messages, duration);
         
-        /* Classify timing behavior */
+        /* Classify timing behavior.
+         * Need at least 2 cycle completions for meaningful gap data
+         * (first completion only initializes last_drop_time). */
         const char *behavior = "sporadic";
         char timing_detail[64] = "";
+        bool have_real_gaps = (g_pattern_tracker.has_gap_data &&
+                               g_pattern_tracker.repeat_count >= 2 &&
+                               g_pattern_tracker.min_gap_ms != UINT32_MAX);
         
-        if (g_pattern_tracker.has_gap_data && g_pattern_tracker.min_gap_ms > 0)
+        if (have_real_gaps)
         {
+            /* Compute rate from gap data (ms precision) — more accurate than duration for short bursts */
+            double avg_gap_s = ((double)g_pattern_tracker.min_gap_ms + g_pattern_tracker.max_gap_ms) / 2000.0;
+            double rate = (avg_gap_s > 0) ? (double)g_pattern_tracker.pattern_length / avg_gap_s : 0;
             uint32_t ratio = g_pattern_tracker.max_gap_ms / g_pattern_tracker.min_gap_ms;
-            double rate = (duration > 0) ? (double)suppressed_messages / duration : 0;
             
             if (g_pattern_tracker.min_gap_ms < 100 && rate > 10)
             {
@@ -287,7 +294,9 @@ static void flush_pattern_summary(log4c_category_t* cat, int log4cPriority)
             {
                 behavior = "periodic";
                 uint32_t avg_gap = (g_pattern_tracker.min_gap_ms + g_pattern_tracker.max_gap_ms) / 2;
-                if (avg_gap >= 1000)
+                if (avg_gap >= 60000)
+                    snprintf(timing_detail, sizeof(timing_detail), "~every %umin", avg_gap / 60000);
+                else if (avg_gap >= 1000)
                     snprintf(timing_detail, sizeof(timing_detail), "~every %us", avg_gap / 1000);
                 else
                     snprintf(timing_detail, sizeof(timing_detail), "~every %ums", avg_gap);
@@ -303,6 +312,7 @@ static void flush_pattern_summary(log4c_category_t* cat, int log4cPriority)
         }
         else if (duration > 0)
         {
+            /* Fallback: no gap data (only 1 cycle), use time_t-based rate */
             double rate = (double)suppressed_messages / duration;
             if (rate > 10)
             {
@@ -311,9 +321,10 @@ static void flush_pattern_summary(log4c_category_t* cat, int log4cPriority)
             }
         }
         
-        /* Format start and end timestamps */
+        /* Format time window */
         struct tm start_tm, end_tm;
         char start_str[20], end_str[20];
+        char window_str[48];
         localtime_r(&g_pattern_tracker.first_timestamp, &start_tm);
         localtime_r(&g_pattern_tracker.last_timestamp, &end_tm);
         snprintf(start_str, sizeof(start_str), "%02d:%02d:%02d",
@@ -321,21 +332,26 @@ static void flush_pattern_summary(log4c_category_t* cat, int log4cPriority)
         snprintf(end_str, sizeof(end_str), "%02d:%02d:%02d",
                  end_tm.tm_hour, end_tm.tm_min, end_tm.tm_sec);
         
+        if (g_pattern_tracker.first_timestamp == g_pattern_tracker.last_timestamp)
+            snprintf(window_str, sizeof(window_str), "at %s", start_str);
+        else
+            snprintf(window_str, sizeof(window_str), "%s-%s", start_str, end_str);
+        
         if (g_pattern_tracker.pattern_length == 1)
         {
             log4c_category_log(cat, log4cPriority, 
-                              "[SUPPRESS] Message repeated %u times (%s %s, %s-%s)\n",
+                              "[SUPPRESS] Message repeated %u times (%s %s, %s)\n",
                               g_pattern_tracker.repeat_count, behavior, timing_detail,
-                              start_str, end_str);
+                              window_str);
         }
         else
         {
             log4c_category_log(cat, log4cPriority, 
-                              "[SUPPRESS] %d-message pattern repeated %u times (%s %s, %s-%s)\n",
+                              "[SUPPRESS] %d-message pattern repeated %u times (%s %s, %s)\n",
                               g_pattern_tracker.pattern_length,
                               g_pattern_tracker.repeat_count,
                               behavior, timing_detail,
-                              start_str, end_str);
+                              window_str);
         }
     }
     
