@@ -1215,32 +1215,32 @@ void rdk_dbg_priv_log_msg(rdk_LogLevel level, const char *module_name, const cha
                     /* Message matches pattern - suppress it */
                     g_pattern_tracker.last_timestamp = current_time;
                     
-                    /* Track gap for timing classification */
-                    struct timespec now_mono;
-                    clock_gettime(CLOCK_MONOTONIC_COARSE, &now_mono);
-                    if (g_pattern_tracker.has_gap_data)
-                    {
-                        uint32_t gap_ms = (uint32_t)((now_mono.tv_sec - g_pattern_tracker.last_drop_time.tv_sec) * 1000
-                                        + (now_mono.tv_nsec - g_pattern_tracker.last_drop_time.tv_nsec) / 1000000);
-                        if (gap_ms < g_pattern_tracker.min_gap_ms)
-                            g_pattern_tracker.min_gap_ms = gap_ms;
-                        if (gap_ms > g_pattern_tracker.max_gap_ms)
-                            g_pattern_tracker.max_gap_ms = gap_ms;
-                    }
-                    else
-                    {
-                        g_pattern_tracker.min_gap_ms = UINT32_MAX;
-                        g_pattern_tracker.max_gap_ms = 0;
-                        g_pattern_tracker.has_gap_data = true;
-                    }
-                    g_pattern_tracker.last_drop_time = now_mono;
-                    
                     /* Move to next position in pattern (pattern_length already validated above) */
                     g_pattern_tracker.next_expected_index = (expected_idx + 1) % g_pattern_tracker.pattern_length;
                     
                     /* If we completed a full pattern cycle, increment repeat count */
                     if (g_pattern_tracker.next_expected_index == 0)
                     {
+                        /* Track gap between cycle completions for timing classification */
+                        struct timespec now_mono;
+                        clock_gettime(CLOCK_MONOTONIC_COARSE, &now_mono);
+                        if (g_pattern_tracker.has_gap_data)
+                        {
+                            uint32_t gap_ms = (uint32_t)((now_mono.tv_sec - g_pattern_tracker.last_drop_time.tv_sec) * 1000
+                                            + (now_mono.tv_nsec - g_pattern_tracker.last_drop_time.tv_nsec) / 1000000);
+                            if (gap_ms < g_pattern_tracker.min_gap_ms)
+                                g_pattern_tracker.min_gap_ms = gap_ms;
+                            if (gap_ms > g_pattern_tracker.max_gap_ms)
+                                g_pattern_tracker.max_gap_ms = gap_ms;
+                        }
+                        else
+                        {
+                            g_pattern_tracker.min_gap_ms = UINT32_MAX;
+                            g_pattern_tracker.max_gap_ms = 0;
+                            g_pattern_tracker.has_gap_data = true;
+                        }
+                        g_pattern_tracker.last_drop_time = now_mono;
+                        
                         /* Safety: Check for overflow (very unlikely but possible) */
                         if (g_pattern_tracker.repeat_count < UINT_MAX)
                         {
