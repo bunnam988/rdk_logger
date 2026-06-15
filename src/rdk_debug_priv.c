@@ -39,6 +39,8 @@
 #include <ctype.h>
 #include <limits.h>
 #include <unistd.h>
+#include <stdint.h>
+#include <stdbool.h>
 #include <sys/syscall.h>   /* For SYS_xxx definitions */
 #include <errno.h>
 #include <fcntl.h>
@@ -102,6 +104,12 @@ typedef struct {
     unsigned int repeat_count;  /* How many complete pattern cycles we've seen */
     time_t first_timestamp;
     time_t last_timestamp;
+    
+    /* Timing classification (burst/periodic/sporadic) */
+    struct timespec last_drop_time; /* Monotonic time of last DROP */
+    uint32_t min_gap_ms;            /* Smallest gap between consecutive DROPs */
+    uint32_t max_gap_ms;            /* Largest gap between consecutive DROPs */
+    bool has_gap_data;              /* True after first gap is recorded */
     
     /* Pattern storage (stores the detected pattern) */
     log_entry_t pattern[MAX_PATTERN_LENGTH];
@@ -261,22 +269,73 @@ static void flush_pattern_summary(log4c_category_t* cat, int log4cPriority)
                      g_pattern_tracker.pattern_length, g_pattern_tracker.repeat_count, 
                      suppressed_messages, duration);
         
-        /* Simplified summary format without message text or timestamp */
+        /* Classify timing behavior */
+        const char *behavior = "sporadic";
+        char timing_detail[64] = "";
+        
+        if (g_pattern_tracker.has_gap_data && g_pattern_tracker.min_gap_ms > 0)
+        {
+            uint32_t ratio = g_pattern_tracker.max_gap_ms / g_pattern_tracker.min_gap_ms;
+            double rate = (duration > 0) ? (double)suppressed_messages / duration : 0;
+            
+            if (g_pattern_tracker.min_gap_ms < 100 && rate > 10)
+            {
+                behavior = "burst";
+                snprintf(timing_detail, sizeof(timing_detail), "~%.0f msg/s", rate);
+            }
+            else if (ratio < 3)
+            {
+                behavior = "periodic";
+                uint32_t avg_gap = (g_pattern_tracker.min_gap_ms + g_pattern_tracker.max_gap_ms) / 2;
+                if (avg_gap >= 1000)
+                    snprintf(timing_detail, sizeof(timing_detail), "~every %us", avg_gap / 1000);
+                else
+                    snprintf(timing_detail, sizeof(timing_detail), "~every %ums", avg_gap);
+            }
+            else
+            {
+                behavior = "sporadic";
+                if (duration >= 60)
+                    snprintf(timing_detail, sizeof(timing_detail), "over %.0f min", duration / 60.0);
+                else
+                    snprintf(timing_detail, sizeof(timing_detail), "over %.0fs", duration);
+            }
+        }
+        else if (duration > 0)
+        {
+            double rate = (double)suppressed_messages / duration;
+            if (rate > 10)
+            {
+                behavior = "burst";
+                snprintf(timing_detail, sizeof(timing_detail), "~%.0f msg/s", rate);
+            }
+        }
+        
+        /* Format start and end timestamps */
+        struct tm start_tm, end_tm;
+        char start_str[20], end_str[20];
+        localtime_r(&g_pattern_tracker.first_timestamp, &start_tm);
+        localtime_r(&g_pattern_tracker.last_timestamp, &end_tm);
+        snprintf(start_str, sizeof(start_str), "%02d:%02d:%02d",
+                 start_tm.tm_hour, start_tm.tm_min, start_tm.tm_sec);
+        snprintf(end_str, sizeof(end_str), "%02d:%02d:%02d",
+                 end_tm.tm_hour, end_tm.tm_min, end_tm.tm_sec);
+        
         if (g_pattern_tracker.pattern_length == 1)
         {
-            /* For single messages, use simpler format */
             log4c_category_log(cat, log4cPriority, 
-                              "[PATTERN] Message repeated %u times (%u messages suppressed for %.1f seconds)\n",
-                              g_pattern_tracker.repeat_count, suppressed_messages, duration);
+                              "[SUPPRESS] Message repeated %u times (%s %s, %s-%s)\n",
+                              g_pattern_tracker.repeat_count, behavior, timing_detail,
+                              start_str, end_str);
         }
         else
         {
-            /* For multi-message patterns, just show pattern length and counts */
             log4c_category_log(cat, log4cPriority, 
-                              "[PATTERN] %d-message pattern repeated %u times (%u messages suppressed for %.1f seconds)\n",
+                              "[SUPPRESS] %d-message pattern repeated %u times (%s %s, %s-%s)\n",
                               g_pattern_tracker.pattern_length,
-                              g_pattern_tracker.repeat_count, 
-                              suppressed_messages, duration);
+                              g_pattern_tracker.repeat_count,
+                              behavior, timing_detail,
+                              start_str, end_str);
         }
     }
     
@@ -284,6 +343,9 @@ static void flush_pattern_summary(log4c_category_t* cat, int log4cPriority)
     g_pattern_tracker.pattern_length = 0;
     g_pattern_tracker.next_expected_index = 0;
     g_pattern_tracker.repeat_count = 0;
+    g_pattern_tracker.has_gap_data = false;
+    g_pattern_tracker.min_gap_ms = UINT32_MAX;
+    g_pattern_tracker.max_gap_ms = 0;
 }
 
 /* Add a log entry to the circular history buffer */
@@ -1152,6 +1214,26 @@ void rdk_dbg_priv_log_msg(rdk_LogLevel level, const char *module_name, const cha
                 {
                     /* Message matches pattern - suppress it */
                     g_pattern_tracker.last_timestamp = current_time;
+                    
+                    /* Track gap for timing classification */
+                    struct timespec now_mono;
+                    clock_gettime(CLOCK_MONOTONIC_COARSE, &now_mono);
+                    if (g_pattern_tracker.has_gap_data)
+                    {
+                        uint32_t gap_ms = (uint32_t)((now_mono.tv_sec - g_pattern_tracker.last_drop_time.tv_sec) * 1000
+                                        + (now_mono.tv_nsec - g_pattern_tracker.last_drop_time.tv_nsec) / 1000000);
+                        if (gap_ms < g_pattern_tracker.min_gap_ms)
+                            g_pattern_tracker.min_gap_ms = gap_ms;
+                        if (gap_ms > g_pattern_tracker.max_gap_ms)
+                            g_pattern_tracker.max_gap_ms = gap_ms;
+                    }
+                    else
+                    {
+                        g_pattern_tracker.min_gap_ms = UINT32_MAX;
+                        g_pattern_tracker.max_gap_ms = 0;
+                        g_pattern_tracker.has_gap_data = true;
+                    }
+                    g_pattern_tracker.last_drop_time = now_mono;
                     
                     /* Move to next position in pattern (pattern_length already validated above) */
                     g_pattern_tracker.next_expected_index = (expected_idx + 1) % g_pattern_tracker.pattern_length;
