@@ -111,6 +111,12 @@ typedef struct {
     uint32_t max_gap_ms;            /* Largest gap between consecutive DROPs */
     bool has_gap_data;              /* True after first gap is recorded */
     
+    /* Timestamp capture for sporadic events (dynamic, no hard limit) */
+    time_t *suppress_ts;            /* Heap-allocated timestamp array */
+    uint16_t ts_count;              /* Number stored */
+    uint16_t ts_capacity;           /* Allocated capacity */
+    time_t last_stored_ts;          /* For 1-second gate */
+    
     /* Pattern storage (stores the detected pattern) */
     log_entry_t pattern[MAX_PATTERN_LENGTH];
 } pattern_tracker_t;
@@ -283,7 +289,8 @@ static void flush_pattern_summary(log4c_category_t* cat, int log4cPriority)
             /* Compute rate from gap data (ms precision) — more accurate than duration for short bursts */
             double avg_gap_s = ((double)g_pattern_tracker.min_gap_ms + g_pattern_tracker.max_gap_ms) / 2000.0;
             double rate = (avg_gap_s > 0) ? (double)g_pattern_tracker.pattern_length / avg_gap_s : 0;
-            uint32_t ratio = g_pattern_tracker.max_gap_ms / g_pattern_tracker.min_gap_ms;
+            uint32_t safe_min = g_pattern_tracker.min_gap_ms ? g_pattern_tracker.min_gap_ms : 1;
+            uint32_t ratio = g_pattern_tracker.max_gap_ms / safe_min;
             
             if (g_pattern_tracker.min_gap_ms < 100 && rate > 10)
             {
@@ -340,18 +347,45 @@ static void flush_pattern_summary(log4c_category_t* cat, int log4cPriority)
         if (g_pattern_tracker.pattern_length == 1)
         {
             log4c_category_log(cat, log4cPriority, 
-                              "[SUPPRESS] Message repeated %u times (%s %s, %s)\n",
-                              g_pattern_tracker.repeat_count, behavior, timing_detail,
+                              "[SUPPRESS] Message repeated %u times (%s%s%s, %s)\n",
+                              g_pattern_tracker.repeat_count, behavior,
+                              timing_detail[0] ? " " : "", timing_detail,
                               window_str);
         }
         else
         {
             log4c_category_log(cat, log4cPriority, 
-                              "[SUPPRESS] %d-message pattern repeated %u times (%s %s, %s)\n",
+                              "[SUPPRESS] %d-message pattern repeated %u times (%s%s%s, %s)\n",
                               g_pattern_tracker.pattern_length,
                               g_pattern_tracker.repeat_count,
-                              behavior, timing_detail,
+                              behavior, timing_detail[0] ? " " : "", timing_detail,
                               window_str);
+        }
+        
+        /* For sporadic events, print all stored timestamps */
+        if (strcmp(behavior, "sporadic") == 0 && g_pattern_tracker.ts_count > 0)
+        {
+            /* Each timestamp = "HH:MM:SS" (8) + ", " (2) = 10 chars max */
+            size_t buf_sz = 16 + (g_pattern_tracker.ts_count * 10) + 20;
+            char *ts_line = (char *)malloc(buf_sz);
+            if (ts_line)
+            {
+                int offset = 0;
+                offset += snprintf(ts_line + offset, buf_sz - offset, "  At: ");
+                uint16_t i;
+                for (i = 0; i < g_pattern_tracker.ts_count; i++)
+                {
+                    struct tm ts_tm;
+                    localtime_r(&g_pattern_tracker.suppress_ts[i], &ts_tm);
+                    offset += snprintf(ts_line + offset, buf_sz - offset,
+                                       "%s%02d:%02d:%02d",
+                                       (i > 0) ? ", " : "",
+                                       ts_tm.tm_hour, ts_tm.tm_min, ts_tm.tm_sec);
+                }
+                snprintf(ts_line + offset, buf_sz - offset, "\n");
+                log4c_category_log(cat, log4cPriority, "%s", ts_line);
+                free(ts_line);
+            }
         }
     }
     
@@ -362,6 +396,13 @@ static void flush_pattern_summary(log4c_category_t* cat, int log4cPriority)
     g_pattern_tracker.has_gap_data = false;
     g_pattern_tracker.min_gap_ms = UINT32_MAX;
     g_pattern_tracker.max_gap_ms = 0;
+    if (g_pattern_tracker.suppress_ts) {
+        free(g_pattern_tracker.suppress_ts);
+        g_pattern_tracker.suppress_ts = NULL;
+    }
+    g_pattern_tracker.ts_count = 0;
+    g_pattern_tracker.ts_capacity = 0;
+    g_pattern_tracker.last_stored_ts = 0;
 }
 
 /* Add a log entry to the circular history buffer */
@@ -1230,6 +1271,29 @@ void rdk_dbg_priv_log_msg(rdk_LogLevel level, const char *module_name, const cha
                 {
                     /* Message matches pattern - suppress it */
                     g_pattern_tracker.last_timestamp = current_time;
+                    
+                    /* Store cycle-start timestamp (1-second gate to skip bursts) */
+                    if (expected_idx == 0 &&
+                        (g_pattern_tracker.ts_count == 0 ||
+                         difftime(current_time, g_pattern_tracker.last_stored_ts) >= 1.0))
+                    {
+                        if (g_pattern_tracker.ts_count >= g_pattern_tracker.ts_capacity)
+                        {
+                            uint16_t new_cap = g_pattern_tracker.ts_capacity ? g_pattern_tracker.ts_capacity * 2 : 16;
+                            if (new_cap <= g_pattern_tracker.ts_capacity)
+                                new_cap = UINT16_MAX; /* overflow guard: cap at 65535 */
+                            time_t *tmp = realloc(g_pattern_tracker.suppress_ts, new_cap * sizeof(time_t));
+                            if (tmp) {
+                                g_pattern_tracker.suppress_ts = tmp;
+                                g_pattern_tracker.ts_capacity = new_cap;
+                            }
+                        }
+                        if (g_pattern_tracker.ts_count < g_pattern_tracker.ts_capacity)
+                        {
+                            g_pattern_tracker.suppress_ts[g_pattern_tracker.ts_count++] = current_time;
+                            g_pattern_tracker.last_stored_ts = current_time;
+                        }
+                    }
                     
                     /* Move to next position in pattern (pattern_length already validated above) */
                     g_pattern_tracker.next_expected_index = (expected_idx + 1) % g_pattern_tracker.pattern_length;
