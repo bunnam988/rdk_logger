@@ -362,25 +362,43 @@ static void flush_pattern_summary(log4c_category_t* cat, int log4cPriority)
                               window_str);
         }
         
-        /* For sporadic events, print all stored timestamps (with date in case it spans midnight) */
+        /* For sporadic events, print all stored timestamps (date only when it changes) */
         if (strcmp(behavior, "sporadic") == 0 && g_pattern_tracker.ts_count > 0)
         {
-            /* Each timestamp = "MM-DD HH:MM:SS" (14) + ", " (2) = 16 chars max */
-            size_t buf_sz = 16 + (g_pattern_tracker.ts_count * 16) + 20;
+            /* Each timestamp = "HH:MM:SS" (8) + ", " (2) = 10 chars
+             * Date bracket "[MM-DD]" (8) added only when date changes
+             * Worst case: all same day = 10 * count. With date changes: ~10*count + 8*changes */
+            size_t buf_sz = 16 + (g_pattern_tracker.ts_count * 12) + 50;
             char *ts_line = (char *)malloc(buf_sz);
             if (ts_line)
             {
                 int offset = 0;
                 offset += snprintf(ts_line + offset, buf_sz - offset, "  At: ");
+                int last_mday = -1, last_mon = -1;
                 uint16_t i;
                 for (i = 0; i < g_pattern_tracker.ts_count; i++)
                 {
                     struct tm ts_tm;
                     localtime_r(&g_pattern_tracker.suppress_ts[i], &ts_tm);
+                    
+                    /* Print date bracket only when date changes */
+                    if (ts_tm.tm_mday != last_mday || ts_tm.tm_mon != last_mon)
+                    {
+                        if (i > 0)
+                            offset += snprintf(ts_line + offset, buf_sz - offset, ", ");
+                        offset += snprintf(ts_line + offset, buf_sz - offset, "[%02d-%02d] ",
+                                           ts_tm.tm_mon + 1, ts_tm.tm_mday);
+                        last_mday = ts_tm.tm_mday;
+                        last_mon = ts_tm.tm_mon;
+                    }
+                    else
+                    {
+                        if (i > 0)
+                            offset += snprintf(ts_line + offset, buf_sz - offset, ", ");
+                    }
+                    
                     offset += snprintf(ts_line + offset, buf_sz - offset,
-                                       "%s%02d-%02d %02d:%02d:%02d",
-                                       (i > 0) ? ", " : "",
-                                       ts_tm.tm_mon + 1, ts_tm.tm_mday,
+                                       "%02d:%02d:%02d",
                                        ts_tm.tm_hour, ts_tm.tm_min, ts_tm.tm_sec);
                 }
                 snprintf(ts_line + offset, buf_sz - offset, "\n");
