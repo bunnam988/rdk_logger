@@ -362,11 +362,11 @@ static void flush_pattern_summary(log4c_category_t* cat, int log4cPriority)
                               window_str);
         }
         
-        /* For sporadic events, print all stored timestamps */
+        /* For sporadic events, print all stored timestamps (with date in case it spans midnight) */
         if (strcmp(behavior, "sporadic") == 0 && g_pattern_tracker.ts_count > 0)
         {
-            /* Each timestamp = "HH:MM:SS" (8) + ", " (2) = 10 chars max */
-            size_t buf_sz = 16 + (g_pattern_tracker.ts_count * 10) + 20;
+            /* Each timestamp = "MM-DD HH:MM:SS" (14) + ", " (2) = 16 chars max */
+            size_t buf_sz = 16 + (g_pattern_tracker.ts_count * 16) + 20;
             char *ts_line = (char *)malloc(buf_sz);
             if (ts_line)
             {
@@ -378,8 +378,9 @@ static void flush_pattern_summary(log4c_category_t* cat, int log4cPriority)
                     struct tm ts_tm;
                     localtime_r(&g_pattern_tracker.suppress_ts[i], &ts_tm);
                     offset += snprintf(ts_line + offset, buf_sz - offset,
-                                       "%s%02d:%02d:%02d",
+                                       "%s%02d-%02d %02d:%02d:%02d",
                                        (i > 0) ? ", " : "",
+                                       ts_tm.tm_mon + 1, ts_tm.tm_mday,
                                        ts_tm.tm_hour, ts_tm.tm_min, ts_tm.tm_sec);
                 }
                 snprintf(ts_line + offset, buf_sz - offset, "\n");
