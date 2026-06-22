@@ -154,6 +154,16 @@ static void pattern_reset(void)
     g_state.pattern_length    = 0;
     g_state.next_expected_idx = 0;
     g_state.repeat_count      = 0;
+    g_state.has_gap_data      = false;
+    g_state.min_gap_ms        = UINT32_MAX;
+    g_state.max_gap_ms        = 0;
+    if (g_state.suppress_ts) {
+        free(g_state.suppress_ts);
+        g_state.suppress_ts = NULL;
+    }
+    g_state.ts_count          = 0;
+    g_state.ts_capacity       = 0;
+    g_state.last_stored_ts    = 0;
 }
 
 /* -----------------------------------------------------------------------
@@ -263,6 +273,13 @@ int rdk_suppressor_init(const rdk_suppressor_config_t *config)
     g_state.repeat_count      = 0;
     g_state.first_timestamp   = 0;
     g_state.last_timestamp    = 0;
+    g_state.has_gap_data      = false;
+    g_state.min_gap_ms        = UINT32_MAX;
+    g_state.max_gap_ms        = 0;
+    g_state.suppress_ts       = NULL;
+    g_state.ts_count          = 0;
+    g_state.ts_capacity       = 0;
+    g_state.last_stored_ts    = 0;
     pthread_mutex_init(&g_state.mutex, NULL);
 
     g_initialized = true;
@@ -280,15 +297,22 @@ void rdk_suppressor_shutdown(void)
     if (g_state.pattern_length > 0 && g_state.repeat_count > 0)
     {
         char summary[RDK_SUPPRESSOR_MSG_SIZE];
-        rdk_suppressor_format_summary(&g_state, &g_config, summary, sizeof(summary));
+        char *ts_line = NULL;
+        rdk_suppressor_format_summary(&g_state, &g_config, summary, sizeof(summary), &ts_line);
         /* Use fprintf since log4c may already be torn down */
-        fprintf(stderr, "%s\n", summary);
+        fprintf(stderr, "%s", summary);
+        if (ts_line) {
+            fprintf(stderr, "%s", ts_line);
+            free(ts_line);
+        }
     }
 
     free(g_state.history);
     free(g_state.pattern);
+    free(g_state.suppress_ts);
     g_state.history = NULL;
     g_state.pattern = NULL;
+    g_state.suppress_ts = NULL;
 
     pthread_mutex_unlock(&g_state.mutex);
     pthread_mutex_destroy(&g_state.mutex);
@@ -300,8 +324,12 @@ rdk_suppress_action_t rdk_suppressor_process_message(
     const char  *module_name,
     const char  *message,
     rdk_LogLevel level,
-    char        *summary_out)
+    char        *summary_out,
+    char       **ts_out)
 {
+    if (ts_out)
+        *ts_out = NULL;
+
     if (!g_initialized || !g_config.enabled || !message)
         return RDK_SUPPRESS_LOG;
 
@@ -349,10 +377,55 @@ rdk_suppress_action_t rdk_suppressor_process_message(
             {
                 /* Message continues active pattern — suppress it (AC-1) */
                 g_state.last_timestamp = now;
-                g_state.next_expected_idx = (g_state.next_expected_idx + 1)
+
+                /* Store cycle-start timestamp (1-second gate to skip bursts) */
+                int cur_idx = g_state.next_expected_idx;
+                if (cur_idx == 0 &&
+                    (g_state.ts_count == 0 || difftime(now, g_state.last_stored_ts) >= 1.0))
+                {
+                    if (g_state.ts_count >= g_state.ts_capacity)
+                    {
+                        uint16_t new_cap = g_state.ts_capacity ? g_state.ts_capacity * 2 : 16;
+                        if (new_cap <= g_state.ts_capacity)
+                            new_cap = UINT16_MAX; /* overflow guard: cap at 65535 */
+                        time_t *tmp = realloc(g_state.suppress_ts, new_cap * sizeof(time_t));
+                        if (tmp) {
+                            g_state.suppress_ts = tmp;
+                            g_state.ts_capacity = new_cap;
+                        }
+                    }
+                    if (g_state.ts_count < g_state.ts_capacity)
+                    {
+                        g_state.suppress_ts[g_state.ts_count++] = now;
+                        g_state.last_stored_ts = now;
+                    }
+                }
+
+                g_state.next_expected_idx = (cur_idx + 1)
                                              % g_state.pattern_length;
                 if (g_state.next_expected_idx == 0)
                 {
+                    /* Cycle completed — track gap for timing classification */
+                    struct timespec now_mono;
+                    clock_gettime(CLOCK_MONOTONIC_COARSE, &now_mono);
+                    if (g_state.has_gap_data)
+                    {
+                        uint32_t gap_ms = (uint32_t)(
+                            (now_mono.tv_sec - g_state.last_drop_time.tv_sec) * 1000 +
+                            (now_mono.tv_nsec - g_state.last_drop_time.tv_nsec) / 1000000);
+                        if (gap_ms < g_state.min_gap_ms)
+                            g_state.min_gap_ms = gap_ms;
+                        if (gap_ms > g_state.max_gap_ms)
+                            g_state.max_gap_ms = gap_ms;
+                    }
+                    else
+                    {
+                        g_state.min_gap_ms = UINT32_MAX;
+                        g_state.max_gap_ms = 0;
+                        g_state.has_gap_data = true;
+                    }
+                    g_state.last_drop_time = now_mono;
+
                     if (g_state.repeat_count < UINT_MAX)
                         g_state.repeat_count++;
                 }
@@ -369,7 +442,8 @@ rdk_suppress_action_t rdk_suppressor_process_message(
                     /* Build summary before reset (AC-2) */
                     if (summary_out)
                         rdk_suppressor_format_summary(&g_state, &g_config,
-                                                      summary_out, RDK_SUPPRESSOR_MSG_SIZE);
+                                                      summary_out, RDK_SUPPRESSOR_MSG_SIZE,
+                                                      ts_out);
                     pattern_reset();
                     /* Detect new pattern from history + current */
                     int L = try_detect_pattern(&cur);

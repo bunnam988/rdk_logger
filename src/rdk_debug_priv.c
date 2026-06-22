@@ -646,8 +646,9 @@ void rdk_dbg_priv_log_msg(rdk_LogLevel level, const char *module_name, const cha
         if (will_be_logged && n > 0 && n <= LOG4C_MSG_BUFFER_SIZE)
         {
             char summary[RDK_SUPPRESSOR_MSG_SIZE] = {0};
+            char *ts_line = NULL;
             rdk_suppress_action_t action =
-                rdk_suppressor_process_message(module_name, logMsg, level, summary);
+                rdk_suppressor_process_message(module_name, logMsg, level, summary, &ts_line);
 
             if (action == RDK_SUPPRESS_DROP)
             {
@@ -655,8 +656,12 @@ void rdk_dbg_priv_log_msg(rdk_LogLevel level, const char *module_name, const cha
             }
             else if (action == RDK_SUPPRESS_SUMMARY)
             {
-                /* AC-2: Emit summary line before the current message (mutex already held) */
+                /* AC-2: Emit summary line before the current message */
                 log4c_category_log(cat, log4cPriority, "%s", summary);
+                if (ts_line) {
+                    log4c_category_log(cat, log4cPriority, "%s", ts_line);
+                    free(ts_line);
+                }
                 /* is_duplicate stays false — current message must be written */
             }
             /* RDK_SUPPRESS_LOG: write normally */

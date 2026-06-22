@@ -36,22 +36,26 @@ extern "C" {
  *
  * AC-2 format:
  *   Single-message:  [SUPPRESS] "<message>" repeated N times
- *                    (M messages suppressed for X seconds)
+ *                    (behavior detail, HH:MM:SS-HH:MM:SS)
  *   Multi-message:   [SUPPRESS] L-message pattern repeated N times
- *                    (M messages suppressed for X seconds)
+ *                    (behavior detail, HH:MM:SS-HH:MM:SS)
  *
  * Only called when repeat_count > 0 (i.e. something was actually suppressed).
  *
- * @param[in]  state   Current engine state (pattern_length, repeat_count, timestamps).
- * @param[in]  config  Suppressor config (max_pattern_length for bounds check).
- * @param[out] out     Output buffer for the formatted string.
- * @param[in]  out_sz  Size of @p out in bytes.
+ * @param[in]  state      Current engine state (pattern_length, repeat_count, timestamps).
+ * @param[in]  config     Suppressor config (max_pattern_length for bounds check).
+ * @param[out] out        Output buffer for the formatted summary line.
+ * @param[in]  out_sz     Size of @p out in bytes.
+ * @param[out] ts_out     If non-NULL and event is sporadic, receives a malloc'd
+ *                        timestamp string ("  At: ...\\n"). Caller must free().
+ *                        Set to NULL if no timestamps to report.
  */
 void rdk_suppressor_format_summary(
     const rdk_suppressor_state_t  *state,
     const rdk_suppressor_config_t *config,
     char                          *out,
-    size_t                         out_sz);
+    size_t                         out_sz,
+    char                         **ts_out);
 
 #ifdef __cplusplus
 }

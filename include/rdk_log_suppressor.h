@@ -58,6 +58,7 @@ extern "C" {
 /** Maximum module name length */
 #define RDK_SUPPRESSOR_MODULE_SIZE 64
 
+
 /* -----------------------------------------------------------------------
  * Configuration (AC-4, AC-5)
  * Populated once at rdk_suppressor_init(), read-only after that.
@@ -92,6 +93,18 @@ typedef struct {
     unsigned int     repeat_count;      /**< Complete cycles suppressed        */
     time_t           first_timestamp;
     time_t           last_timestamp;
+
+    /* Timing classification (burst/periodic/sporadic) */
+    struct timespec  last_drop_time;    /**< Monotonic time of last cycle completion */
+    uint32_t         min_gap_ms;        /**< Smallest cycle-to-cycle gap (ms)  */
+    uint32_t         max_gap_ms;        /**< Largest cycle-to-cycle gap (ms)   */
+    bool             has_gap_data;      /**< True after first gap recorded     */
+
+    /* Sporadic timestamp capture (dynamic realloc, 1-second gate, no hard limit) */
+    time_t          *suppress_ts;       /**< Heap-allocated timestamp array    */
+    uint16_t         ts_count;          /**< Number stored                     */
+    uint16_t         ts_capacity;       /**< Allocated capacity                */
+    time_t           last_stored_ts;    /**< For 1-second dedup gate           */
 
     pthread_mutex_t  mutex;
 } rdk_suppressor_state_t;
@@ -165,13 +178,16 @@ void rdk_suppressor_shutdown(void);
  *                          is populated with the [SUPPRESS] line to emit
  *                          before writing the current message.
  *                          Buffer must be at least RDK_SUPPRESSOR_MSG_SIZE bytes.
+ * @param[out] ts_out       If non-NULL and event is sporadic, receives a
+ *                          malloc'd timestamp line. Caller must free().
  * @return  Action the caller must take.
  */
 rdk_suppress_action_t rdk_suppressor_process_message(
     const char  *module_name,
     const char  *message,
     rdk_LogLevel level,
-    char        *summary_out);
+    char        *summary_out,
+    char       **ts_out);
 
 #ifdef __cplusplus
 }
