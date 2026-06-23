@@ -128,10 +128,16 @@ void rdk_suppressor_format_summary(
     /* --- Build main summary line --- */
     if (state->pattern_length == 1)
     {
+        /* Strip trailing newline from message for clean formatting */
+        int msg_len = (int)strlen(state->pattern[0].message);
+        while (msg_len > 0 && (state->pattern[0].message[msg_len - 1] == '\n' ||
+                               state->pattern[0].message[msg_len - 1] == '\r'))
+            msg_len--;
+
         snprintf(out, out_sz,
-                 "[SUPPRESS] \"%s\" repeated %u times "
+                 "[SUPPRESS] \"%.*s\" repeated %u times "
                  "(%s%s%s, %s)\n",
-                 state->pattern[0].message,
+                 msg_len, state->pattern[0].message,
                  state->repeat_count,
                  behavior, timing_detail[0] ? " " : "", timing_detail,
                  window_str);
