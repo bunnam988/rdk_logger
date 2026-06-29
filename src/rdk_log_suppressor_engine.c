@@ -388,7 +388,7 @@ rdk_suppress_action_t rdk_suppressor_process_message(
                         uint16_t new_cap = g_state.ts_capacity ? g_state.ts_capacity * 2 : 16;
                         if (new_cap <= g_state.ts_capacity)
                             new_cap = UINT16_MAX; /* overflow guard: cap at 65535 */
-                        time_t *tmp = realloc(g_state.suppress_ts, new_cap * sizeof(time_t));
+                        struct timespec *tmp = realloc(g_state.suppress_ts, new_cap * sizeof(struct timespec));
                         if (tmp) {
                             g_state.suppress_ts = tmp;
                             g_state.ts_capacity = new_cap;
@@ -396,7 +396,9 @@ rdk_suppress_action_t rdk_suppressor_process_message(
                     }
                     if (g_state.ts_count < g_state.ts_capacity)
                     {
-                        g_state.suppress_ts[g_state.ts_count++] = now;
+                        struct timespec ts_now;
+                        clock_gettime(CLOCK_REALTIME, &ts_now);
+                        g_state.suppress_ts[g_state.ts_count++] = ts_now;
                         g_state.last_stored_ts = now;
                     }
                 }

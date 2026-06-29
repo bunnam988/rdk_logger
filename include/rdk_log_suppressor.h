@@ -101,10 +101,10 @@ typedef struct {
     bool             has_gap_data;      /**< True after first gap recorded     */
 
     /* Sporadic timestamp capture (dynamic realloc, 1-second gate, no hard limit) */
-    time_t          *suppress_ts;       /**< Heap-allocated timestamp array    */
+    struct timespec  *suppress_ts;      /**< Heap-allocated timestamp array (µs precision) */
     uint16_t         ts_count;          /**< Number stored                     */
     uint16_t         ts_capacity;       /**< Allocated capacity                */
-    time_t           last_stored_ts;    /**< For 1-second dedup gate           */
+    time_t           last_stored_ts;    /**< For 1-second dedup gate (seconds only) */
 
     pthread_mutex_t  mutex;
 } rdk_suppressor_state_t;

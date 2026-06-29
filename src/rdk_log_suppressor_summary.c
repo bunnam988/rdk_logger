@@ -156,10 +156,10 @@ void rdk_suppressor_format_summary(
     /* --- For sporadic events, allocate timestamp line (caller frees) --- */
     if (ts_out && strcmp(behavior, "sporadic") == 0 && state->ts_count > 0)
     {
-        /* Each timestamp = "HH:MM:SS" (8) + ", " (2) = 10 chars
+        /* Each timestamp = "HH:MM:SS.uuuuuu" (15) + ", " (2) = 17 chars
          * Date bracket "[MM-DD] " (8) added only when date changes
-         * Worst case: all same day = 10 * count + 8 date changes */
-        size_t buf_sz = 16 + (state->ts_count * 12) + 50;
+         * Worst case: all same day = 17 * count + 8 date changes */
+        size_t buf_sz = 16 + (state->ts_count * 20) + 50;
         char *ts_line = (char *)malloc(buf_sz);
         if (ts_line)
         {
@@ -170,7 +170,9 @@ void rdk_suppressor_format_summary(
             for (i = 0; i < state->ts_count; i++)
             {
                 struct tm ts_tm;
-                localtime_r(&state->suppress_ts[i], &ts_tm);
+                time_t ts_sec = state->suppress_ts[i].tv_sec;
+                long   ts_usec = state->suppress_ts[i].tv_nsec / 1000;
+                localtime_r(&ts_sec, &ts_tm);
 
                 /* Print date bracket only when date changes */
                 if (ts_tm.tm_mday != last_mday || ts_tm.tm_mon != last_mon)
@@ -188,8 +190,8 @@ void rdk_suppressor_format_summary(
                         pos += snprintf(ts_line + pos, buf_sz - pos, ", ");
                 }
 
-                pos += snprintf(ts_line + pos, buf_sz - pos, "%02d:%02d:%02d",
-                                ts_tm.tm_hour, ts_tm.tm_min, ts_tm.tm_sec);
+                pos += snprintf(ts_line + pos, buf_sz - pos, "%02d:%02d:%02d.%06ld",
+                                ts_tm.tm_hour, ts_tm.tm_min, ts_tm.tm_sec, ts_usec);
             }
             snprintf(ts_line + pos, buf_sz - pos, "\n");
             *ts_out = ts_line;
