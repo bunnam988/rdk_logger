@@ -662,17 +662,19 @@ void rdk_dbg_priv_log_msg(rdk_LogLevel level, const char *module_name, const cha
                     /* ts_line may hold several '\n'-separated secondary lines
                      * (sporadic "At:" timestamps and/or per-string suppression
                      * breakdown). Emit each as its own log record so telemetry
-                     * grep sees a normally-prefixed log line per entry. */
+                     * grep sees a normally-prefixed log line per entry. The
+                     * newline is re-added since log4c relies on the message
+                     * carrying its own line terminator. */
                     char *seg = ts_line;
                     char *nl;
                     while ((nl = strchr(seg, '\n')) != NULL) {
                         *nl = '\0';
                         if (*seg)
-                            log4c_category_log(cat, log4cPriority, "%s", seg);
+                            log4c_category_log(cat, log4cPriority, "%s\n", seg);
                         seg = nl + 1;
                     }
                     if (*seg)
-                        log4c_category_log(cat, log4cPriority, "%s", seg);
+                        log4c_category_log(cat, log4cPriority, "%s\n", seg);
                     free(ts_line);
                 }
                 /* is_duplicate stays false — current message must be written */
