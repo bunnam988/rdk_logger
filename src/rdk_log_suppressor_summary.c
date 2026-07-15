@@ -27,6 +27,15 @@
  *
  *   Multi-message pattern (pattern_length >= 2):
  *     [SUPPRESS] L-message pattern repeated N times (M messages suppressed for X seconds)
+ *     followed by one breakdown line per pattern slot:
+ *       Suppressed: "<message>" repeated N times
+ *
+ * The breakdown lines let T1 grep-based telemetry find and count an
+ * individual pattern string, which never appears in the multi-message
+ * header. The "repeated <n> times" token is the single machine-readable
+ * count field shared by both the single-message header and the breakdown
+ * lines, so one grep rule works for both: on a matching line, add the
+ * number after "repeated"; otherwise count the line as one occurrence.
  *
  * Nothing is emitted if repeat_count == 0 — the caller is responsible for
  * only calling this when something was actually suppressed.
@@ -195,6 +204,46 @@ void rdk_suppressor_format_summary(
             }
             snprintf(ts_line + pos, buf_sz - pos, "\n");
             *ts_out = ts_line;
+        }
+    }
+
+    /* --- Multi-message: emit one breakdown line per pattern slot so T1
+     *     grep-based telemetry can locate and count each individual pattern
+     *     string (the strings never appear in the multi-message header).
+     *     One line per slot is intentional: if the same string occupies
+     *     several slots, grep sums them for the correct per-string count.
+     *     Merged into *ts_out (after any sporadic "At:" line); the caller
+     *     emits each '\n'-separated line as its own log record. --- */
+    if (ts_out && state->pattern_length >= 2)
+    {
+        size_t existing_len = (*ts_out) ? strlen(*ts_out) : 0;
+        size_t need = existing_len + 1;
+        int p;
+        for (p = 0; p < state->pattern_length; p++)
+            need += strlen(state->pattern[p].message) + 64; /* wrapper + count */
+
+        char *buf = (char *)malloc(need);
+        if (buf)
+        {
+            int pos = 0;
+            if (existing_len)
+            {
+                memcpy(buf, *ts_out, existing_len);
+                pos = (int)existing_len;
+            }
+            for (p = 0; p < state->pattern_length; p++)
+            {
+                int mlen = (int)strlen(state->pattern[p].message);
+                while (mlen > 0 && (state->pattern[p].message[mlen - 1] == '\n' ||
+                                    state->pattern[p].message[mlen - 1] == '\r'))
+                    mlen--;
+                pos += snprintf(buf + pos, need - pos,
+                                "  Suppressed: \"%.*s\" repeated %u times\n",
+                                mlen, state->pattern[p].message,
+                                state->repeat_count);
+            }
+            free(*ts_out);
+            *ts_out = buf;
         }
     }
 }

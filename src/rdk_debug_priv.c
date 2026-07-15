@@ -659,7 +659,20 @@ void rdk_dbg_priv_log_msg(rdk_LogLevel level, const char *module_name, const cha
                 /* AC-2: Emit summary line before the current message */
                 log4c_category_log(cat, log4cPriority, "%s", summary);
                 if (ts_line) {
-                    log4c_category_log(cat, log4cPriority, "%s", ts_line);
+                    /* ts_line may hold several '\n'-separated secondary lines
+                     * (sporadic "At:" timestamps and/or per-string suppression
+                     * breakdown). Emit each as its own log record so telemetry
+                     * grep sees a normally-prefixed log line per entry. */
+                    char *seg = ts_line;
+                    char *nl;
+                    while ((nl = strchr(seg, '\n')) != NULL) {
+                        *nl = '\0';
+                        if (*seg)
+                            log4c_category_log(cat, log4cPriority, "%s", seg);
+                        seg = nl + 1;
+                    }
+                    if (*seg)
+                        log4c_category_log(cat, log4cPriority, "%s", seg);
                     free(ts_line);
                 }
                 /* is_duplicate stays false — current message must be written */
