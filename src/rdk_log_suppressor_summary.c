@@ -162,8 +162,11 @@ void rdk_suppressor_format_summary(
                  window_str);
     }
 
-    /* --- For sporadic events, allocate timestamp line (caller frees) --- */
-    if (ts_out && strcmp(behavior, "sporadic") == 0 && state->ts_count > 0)
+    /* --- For sporadic events, allocate timestamp line (caller frees) ---
+     * Only when there are >= 2 timestamps to list: a single timestamp is
+     * already shown by the "at HH:MM:SS" window, so an "At:" line with one
+     * entry would only add a redundant line (net log growth). */
+    if (ts_out && strcmp(behavior, "sporadic") == 0 && state->ts_count > 1)
     {
         /* Each timestamp = "HH:MM:SS.uuuuuu" (15) + ", " (2) = 17 chars
          * Date bracket "[MM-DD] " (8) added only when date changes
